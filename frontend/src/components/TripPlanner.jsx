@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import RoleHeader from './RoleHeader';
 import { collection, query, where, getDocs, addDoc, deleteDoc, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { motion } from 'framer-motion';
 
 // ── Haversine distance (km) between two lat/lng points ───────────────────────
 const haversine = (lat1, lng1, lat2, lng2) => {
@@ -59,44 +61,7 @@ const optimizePlaces = (places, days) => {
   return itinerary;
 };
 
-// ── Wikipedia Filter Helper ──────────────────────────────────────────────────
-const filterWikipediaResults = (results, stateQuery) => {
-  const BAD_TITLES = ["tourism", "history", "culture", "movie", "film", "song", "list of", "overview", "district", "state", "india"];
-  const GOOD_WORDS = ["temple", "fort", "palace", "museum", "park", "lake", "hill", "garden", "beach", "monument", "zoo", "sanctuary", "waterfall", "island", "church", "mosque"];
-
-  let filtered = results.filter(item => {
-    const titleLower = item.title.toLowerCase();
-    const snippetLower = item.snippet.toLowerCase();
-
-    // 1. STRICT TITLE FILTER
-    if (BAD_TITLES.some(bad => titleLower.includes(bad))) return false;
-
-    // 4. REMOVE GENERIC RESULTS
-    if (!item.snippet || item.snippet.length < 20) return false;
-
-    // 3. STATE FILTER (STRICT)
-    if (stateQuery) {
-      const stateLower = stateQuery.toLowerCase();
-      if (!titleLower.includes(stateLower) && !snippetLower.includes(stateLower)) return false;
-    }
-
-    // 2. KEYWORD VALIDATION
-    return GOOD_WORDS.some(good => titleLower.includes(good) || snippetLower.includes(good));
-  });
-
-  // 7. FALLBACK
-  if (filtered.length < 3) {
-    filtered = results.filter(item => {
-      const titleLower = item.title.toLowerCase();
-      if (BAD_TITLES.some(bad => titleLower.includes(bad))) return false;
-      if (!item.snippet || item.snippet.length < 20) return false;
-      return true; // Relax keyword and state filters
-    });
-  }
-
-  // 6. LIMIT CLEAN DATA
-  return filtered.slice(0, 10);
-};
+// (Wikipedia Filter Helper removed)
 
 // ─────────────────────────────────────────────────────────────────────────────
 const CITIES = ['Hyderabad', 'Bangalore', 'Chennai', 'Mumbai', 'Delhi', 'Kolkata', 'Jaipur', 'Agra', 'Goa', 'Varanasi'];
@@ -111,85 +76,88 @@ const isValidOsmName = (name) => {
   return true;
 };
 
-const fetchOverpassPlaces = async (lat, lon, radius = 80000) => {
+const fetchOverpassPlaces = async (lat, lon, radius = 25000) => {
   const getQuery = (rad) => `[out:json][timeout:30];
 (
   node["tourism"="attraction"](around:${rad},${lat},${lon});
   way["tourism"="attraction"](around:${rad},${lat},${lon});
   node["tourism"="museum"](around:${rad},${lat},${lon});
   way["tourism"="museum"](around:${rad},${lat},${lon});
-  node["tourism"="zoo"](around:${rad},${lat},${lon});
-  way["tourism"="zoo"](around:${rad},${lat},${lon});
-  node["tourism"="gallery"](around:${rad},${lat},${lon});
-  way["tourism"="gallery"](around:${rad},${lat},${lon});
+  node["historic"="monument"](around:${rad},${lat},${lon});
+  way["historic"="monument"](around:${rad},${lat},${lon});
+  node["historic"="castle"](around:${rad},${lat},${lon});
+  way["historic"="castle"](around:${rad},${lat},${lon});
+  node["historic"="fort"](around:${rad},${lat},${lon});
+  way["historic"="fort"](around:${rad},${lat},${lon});
+  node["historic"="ruins"](around:${rad},${lat},${lon});
+  way["historic"="ruins"](around:${rad},${lat},${lon});
   node["leisure"="park"](around:${rad},${lat},${lon});
   way["leisure"="park"](around:${rad},${lat},${lon});
-  node["natural"](around:${rad},${lat},${lon});
-  way["natural"](around:${rad},${lat},${lon});
-  node["historic"](around:${rad},${lat},${lon});
-  way["historic"](around:${rad},${lat},${lon});
+  node["leisure"="garden"](around:${rad},${lat},${lon});
+  way["leisure"="garden"](around:${rad},${lat},${lon});
+  node["natural"="water"](around:${rad},${lat},${lon});
+  way["natural"="water"](around:${rad},${lat},${lon});
+  node["natural"="beach"](around:${rad},${lat},${lon});
+  way["natural"="beach"](around:${rad},${lat},${lon});
+  node["waterway"="waterfall"](around:${rad},${lat},${lon});
+  way["waterway"="waterfall"](around:${rad},${lat},${lon});
+  node["tourism"="zoo"](around:${rad},${lat},${lon});
+  way["tourism"="zoo"](around:${rad},${lat},${lon});
   node["amenity"="place_of_worship"](around:${rad},${lat},${lon});
   way["amenity"="place_of_worship"](around:${rad},${lat},${lon});
 );
-out center 60;`;
+out center 100;`;
 
-  let res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    body: getQuery(radius),
-    headers: { 'Content-Type': 'text/plain' }
-  });
-  let data = await res.json();
-  console.log('Overpass response:', data);
-
-  // If empty, retry with 120km
-  if (!data.elements || data.elements.length === 0) {
-    console.log('Overpass empty, retrying with 120000 radius...');
-    res = await fetch('https://overpass-api.de/api/interpreter', {
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
       method: 'POST',
-      body: getQuery(120000),
+      body: getQuery(radius),
       headers: { 'Content-Type': 'text/plain' }
     });
-    data = await res.json();
-    console.log('Overpass response (retry):', data);
-  }
+    const data = await res.json();
+    console.log('Overpass response:', data);
 
-  const seen = new Set();
-  const results = [];
+    const seen = new Set();
+    const results = [];
 
-  // Sort so tourism-tagged nodes come first
-  const elements = (data.elements || []).sort((a, b) => {
-    const aHasTourism = a.tags?.tourism ? 0 : 1;
-    const bHasTourism = b.tags?.tourism ? 0 : 1;
-    return aHasTourism - bHasTourism;
-  });
-
-  for (const el of elements) {
-    if (!el.tags) continue;
-    const name = (el.tags.name || '').trim();
-    if (!isValidOsmName(name)) continue;           // minimal filtering for missing/invalid names
-    if (seen.has(name.toLowerCase())) continue;    // deduplicate
-    const elLat = el.lat ?? el.center?.lat;
-    const elLon = el.lon ?? el.center?.lon;
-    if (!elLat || !elLon) continue;               // must have valid coords
-
-    seen.add(name.toLowerCase());
-    results.push({
-      id: `osm_${el.id}`,
-      name,
-      latitude: elLat,
-      longitude: elLon,
-      type: el.tags.tourism || el.tags.leisure || el.tags.historic || el.tags.natural || el.tags.amenity || 'Attraction',
-      description: el.tags.description || null,
-      image: null,
-      openingTime: el.tags.opening_hours || 'N/A',
-      closingTime: 'N/A',
-      rating: 5
+    // Sort so tourism-tagged nodes come first
+    const elements = (data.elements || []).sort((a, b) => {
+      const aHasTourism = a.tags?.tourism ? 0 : 1;
+      const bHasTourism = b.tags?.tourism ? 0 : 1;
+      return aHasTourism - bHasTourism;
     });
-    if (results.length >= 60) break;
-  }
 
-  console.log('Total places fetched:', results.length);
-  return results;
+    for (const el of elements) {
+      if (!el.tags) continue;
+      const name = (el.tags.name || '').trim();
+      if (!isValidOsmName(name)) continue;
+      if (seen.has(name.toLowerCase())) continue;
+      const elLat = el.lat ?? el.center?.lat;
+      const elLon = el.lon ?? el.center?.lon;
+      if (!elLat || !elLon) continue;
+
+      seen.add(name.toLowerCase());
+      results.push({
+        id: `osm_${el.id}`,
+        name,
+        latitude: elLat,
+        longitude: elLon,
+        type: el.tags.tourism || el.tags.leisure || el.tags.historic || el.tags.natural || el.tags.amenity || 'Attraction',
+        description: el.tags.description || null,
+        image: null,
+        openingTime: el.tags.opening_hours || 'N/A',
+        closingTime: 'N/A',
+        rating: 5
+      });
+      if (results.length >= 60) break;
+    }
+
+    console.log('Total places fetched:', results.length);
+    return results;
+  } catch (err) {
+    console.error("Overpass fetch failed:", err);
+    return [];
+  }
 };
 
 // ── Overpass Nearby Services Helper ──────────────────────────────────────────
@@ -299,16 +267,15 @@ const enrichWithWikipedia = async (places) => {
 
 // ── Final Place Cleaner ─────────────────────────────────────────────────────
 // Applied to the final list regardless of which source produced it.
-const PLACE_BAD_WORDS  = ['tourism','history','culture','movie','film','song','list of','overview','district','state','india'];
-const PLACE_GOOD_WORDS = ['temple','fort','palace','museum','park','lake','hill','garden','beach','monument','zoo','sanctuary','waterfall','island','church','mosque','masjid','mandir','dargah','reservoir','cave','wildlife'];
+const PLACE_BAD_WORDS  = ['tourism','history','culture','movie','film','song','list of','overview','district','state','india','wikipedia','article'];
 
 const cleanPlaces = (places, state = '') => {
-  // Only block genuinely invalid entries — no keyword dependency
   let cleaned = places.filter(p => {
     if (!p.name || p.name.trim().length < 3) return false;
+    if (!p.latitude || !p.longitude) return false;
     const nameLower = p.name.toLowerCase();
     if (PLACE_BAD_WORDS.some(b => nameLower.includes(b))) return false;
-    return true; // keep all valid named places with coords
+    return true;
   });
 
   const final = cleaned.slice(0, 40);
@@ -483,101 +450,24 @@ const TripPlanner = () => {
         }
         console.log('Coordinates:', lat, lon);
 
-        // 3. Fetch Places via Overpass + Wikipedia Hybrid
+        // 3. Fetch Places via Overpass API (Strict Geolocation)
         let list = [];
         try {
-          let overpassPlaces = [];
-          try {
-            overpassPlaces = await fetchOverpassPlaces(lat, lon, 80000);
-            console.log('Overpass places found:', overpassPlaces.length);
-          } catch (overpassErr) {
-            console.warn('Overpass failed, falling back to Wikipedia:', overpassErr);
-          }
+          const overpassPlaces = await fetchOverpassPlaces(lat, lon, 25000);
+          console.log('Overpass places found:', overpassPlaces.length);
 
           if (overpassPlaces.length > 0) {
-            // Overpass returned real places – enrich top 30 with Wikipedia descriptions/images
+            // Enrich top 30 with Wikipedia descriptions/images only using EXACT names
             list = await enrichWithWikipedia(overpassPlaces.slice(0, 30));
             if (isMounted) setPlacesLabel(`Showing top tourist places near ${city}`);
           } else {
-            // ── Wikipedia Category Fallback ──────────────────────────────────
-            // Category members are real place NAMES (e.g. "Charminar"), not search results.
-            // We only keep members that Wikipedia can return with real geo-coordinates.
-            console.log('Overpass empty — trying Wikipedia Category fallback...');
-            const BAD_TITLE = ['list of','tourism','history','overview','culture','district','state','india','film','movie','song'];
-            const uniqueTitles = new Set();
-
-            const fetchCategory = async (cat) => {
-              try {
-                const r = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=${encodeURIComponent(cat)}&cmlimit=50&format=json&origin=*`);
-                const d = await r.json();
-                (d.query?.categorymembers || []).forEach(m => {
-                  const tl = m.title.toLowerCase();
-                  if (!BAD_TITLE.some(b => tl.includes(b))) uniqueTitles.add(m.title);
-                });
-              } catch (e) { console.warn('Category fetch failed:', cat); }
-            };
-
-            await Promise.all([
-              fetchCategory(`Category:Tourist attractions in ${city}`),
-              fetchCategory(`Category:Buildings and structures in ${city}`),
-              fetchCategory(`Category:Parks in ${city}`),
-              fetchCategory(`Category:Museums in ${city}`)
-            ]);
-
-            const titleArr = Array.from(uniqueTitles);
-            console.log('Category titles found:', titleArr.length);
-
-            if (titleArr.length > 0) {
-              // Bulk-fetch details+coordinates for top 20 titles in one API call
-              const topTitles = titleArr.slice(0, 20);
-              const detailUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages|coordinates&titles=${encodeURIComponent(topTitles.join('|'))}&format=json&origin=*&exintro=true&explaintext=true&piprop=original`;
-              const detailRes = await fetch(detailUrl);
-              const detailData = await detailRes.json();
-
-              if (detailData.query?.pages) {
-                for (const key of Object.keys(detailData.query.pages)) {
-                  const page = detailData.query.pages[key];
-                  // CRITICAL: reject any page without real Wikipedia coordinates
-                  if (!page.coordinates || !page.coordinates[0]) continue;
-                  if (page.pageid < 1) continue;
-
-                  const titleLower = (page.title || '').toLowerCase();
-                  if (BAD_TITLE.some(b => titleLower.includes(b))) continue; // double-check
-
-                  list.push({
-                    id: `wiki_${page.pageid}`,
-                    name: page.title,
-                    description: page.extract ? page.extract.substring(0, 300) + '...' : 'No description available.',
-                    latitude: parseFloat(page.coordinates[0].lat),
-                    longitude: parseFloat(page.coordinates[0].lon),
-                    type: 'Attraction',
-                    image: page.original ? page.original.source : null,
-                    rating: 5,
-                    openingTime: 'N/A',
-                    closingTime: 'N/A'
-                  });
-                }
-              }
-              console.log('Valid Wikipedia category places (with coords):', list.length);
-              if (list.length > 0 && isMounted) setPlacesLabel(`Top Tourist Attractions in ${city}`);
-            }
-
-            if (list.length === 0) {
-              if (isMounted) setPlacesError('No tourist places found for this city. Try a nearby major city.');
-              setPlaces([]);
-              setLoadingPlaces(false);
-              return;
-            }
-          }
-
-          if (list.length === 0) {
-            if (isMounted) setPlacesError('No tourist places found for this city.');
+            if (isMounted) setPlacesError('No real tourist places found in this strict area. Try zooming out or a major city.');
             setPlaces([]);
             setLoadingPlaces(false);
             return;
           }
-        } catch (wikiErr) {
-          console.error('Places fetch error:', wikiErr);
+        } catch (apiErr) {
+          console.error('Places fetch error:', apiErr);
           throw new Error('Places fetch error');
         }
 
@@ -808,50 +698,7 @@ const TripPlanner = () => {
       }
     }
 
-      // Fallback to Wikipedia search for nearby
-      if (!nearbyFetched) {
-        const stateQuery = activeCity || '';
-        const nearbyRes = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(place.name + ' tourist places in ' + stateQuery)}&format=json&origin=*`
-        );
-        const nearbyJson = await nearbyRes.json();
-        if (nearbyJson.query && nearbyJson.query.search) {
-          const searchResults = filterWikipediaResults(nearbyJson.query.search, stateQuery)
-            .filter(r => r.title.toLowerCase() !== place.name.toLowerCase());
-          const enrichedNearby = [];
-          for (const res of searchResults) {
-            let nLat = null, nLon = null;
-            try {
-              const gRes = await fetch(
-                `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(res.title)}&format=json&limit=1`,
-                { headers: { 'User-Agent': 'TravelEaseApp' } }
-              );
-              const gData = await gRes.json();
-              if (gData && gData.length > 0) { nLat = parseFloat(gData[0].lat); nLon = parseFloat(gData[0].lon); }
-            } catch (e) { /* no coords */ }
-            const dist = (placeLat && placeLon && nLat && nLon)
-              ? haversine(placeLat, placeLon, nLat, nLon).toFixed(1)
-              : null;
-            enrichedNearby.push({
-              id: `wiki_${res.pageid}`,
-              name: res.title,
-              description: res.snippet ? res.snippet.replace(/<[^>]+>/g, '') : '',
-              snippet: res.snippet,
-              latitude: nLat,
-              longitude: nLon,
-              distance: dist
-            });
-          }
-          // Apply same cleaning to nearby results
-          const cleanedNearby = cleanPlaces(enrichedNearby, stateQuery);
-          cleanedNearby.sort((a, b) => {
-            if (a.distance === null) return 1;
-            if (b.distance === null) return -1;
-            return parseFloat(a.distance) - parseFloat(b.distance);
-          });
-          setNearbyPlaces(cleanedNearby);
-        }
-      }
+      // Wikipedia search fallback removed to strictly enforce real POIs
 
     } catch (err) {
       console.error("Details fetch error:", err);
@@ -867,37 +714,37 @@ const TripPlanner = () => {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-[1400px] w-full mx-auto flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-700 ease-out">
+    <div className="max-w-[1400px] w-full mx-auto flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-700 ease-out text-slate-200">
 
       {/* ── Hero Header ── */}
-      <div className="bg-gradient-to-br from-slate-900 via-teal-900 to-blue-900 p-10 md:p-12 rounded-[2rem] shadow-2xl shadow-teal-900/20 border border-white/10 relative overflow-hidden group">
-        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 mix-blend-overlay"></div>
-        <div className="absolute top-0 right-0 opacity-5 text-[220px] leading-none translate-x-12 -translate-y-8 pointer-events-none group-hover:rotate-12 group-hover:scale-110 transition-transform duration-1000 select-none">🗺️</div>
-        <h2 className="text-4xl md:text-5xl font-black text-white mb-3 tracking-tight relative z-10 drop-shadow-md">Trip Planner</h2>
-        <p className="text-teal-100 text-lg relative z-10 max-w-2xl font-medium">Pick your city, set your days, select places — get an optimized day-by-day itinerary.</p>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-panel p-10 md:p-12 rounded-[2rem] shadow-2xl relative overflow-hidden group border border-cyan-500/30">
+        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-20 mix-blend-overlay"></div>
+        <div className="absolute top-0 right-0 opacity-10 text-[220px] leading-none translate-x-12 -translate-y-8 pointer-events-none group-hover:rotate-12 group-hover:scale-110 transition-transform duration-1000 select-none drop-shadow-[0_0_15px_rgba(34,211,238,0.5)]">🗺️</div>
+        <h2 className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-fuchsia-400 mb-3 tracking-tight relative z-10 drop-shadow-md">Trip Planner</h2>
+        <p className="text-cyan-100 text-lg relative z-10 max-w-2xl font-medium">Pick your city, set your days, select places — get an optimized day-by-day itinerary.</p>
 
         {/* ── Input row ── */}
         <div className="mt-8 flex flex-col md:flex-row gap-5 relative z-10">
           {/* City dropdown */}
           <div className="flex-1 group/input">
-            <label className="block text-xs font-black text-teal-300 uppercase tracking-widest mb-2 opacity-80">City</label>
+            <label className="block text-xs font-black text-cyan-300 uppercase tracking-widest mb-2 opacity-80">City</label>
             <select
-              className="w-full px-5 py-4 rounded-2xl font-extrabold text-slate-800 bg-white/90 backdrop-blur-md shadow-lg outline-none appearance-none cursor-pointer border border-white/20 transition-all hover:bg-white focus:ring-4 focus:ring-teal-500/30"
+              className="glass-input w-full px-5 py-4 rounded-2xl font-extrabold appearance-none cursor-pointer"
               value={city}
               onChange={e => { setCity(e.target.value); setCustomCity(''); setUseLocation(false); setLocStatus(''); }}
             >
-              <option value="">— Choose a city —</option>
-              {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="" className="bg-slate-900">— Choose a city —</option>
+              {CITIES.map(c => <option key={c} value={c} className="bg-slate-900">{c}</option>)}
             </select>
           </div>
 
           {/* Custom city input */}
           <div className="flex-1 group/input">
-            <label className="block text-xs font-black text-teal-300 uppercase tracking-widest mb-2 opacity-80">Or type city</label>
+            <label className="block text-xs font-black text-cyan-300 uppercase tracking-widest mb-2 opacity-80">Or type city</label>
             <input
               type="text"
               placeholder="e.g. Mysore, Pune..."
-              className="w-full px-5 py-4 rounded-2xl font-bold text-slate-800 bg-white/90 backdrop-blur-md shadow-lg outline-none border border-white/20 transition-all hover:bg-white focus:ring-4 focus:ring-teal-500/30 placeholder-slate-400"
+              className="glass-input w-full px-5 py-4 rounded-2xl font-bold placeholder-slate-500"
               value={customCity}
               onChange={e => { setCustomCity(e.target.value); setCity(e.target.value); }}
             />
@@ -905,10 +752,10 @@ const TripPlanner = () => {
 
           {/* Use GPS button */}
           <div className="flex flex-col justify-end gap-1">
-            <label className="block text-xs font-black text-teal-300 uppercase tracking-widest mb-2 opacity-80 hidden md:block">&nbsp;</label>
+            <label className="block text-xs font-black text-cyan-300 uppercase tracking-widest mb-2 opacity-80 hidden md:block">&nbsp;</label>
             <button
               onClick={handleUseLocation}
-              className="w-full md:w-auto px-6 py-4 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-extrabold rounded-2xl transition-all duration-300 backdrop-blur-md whitespace-nowrap shadow-lg hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2"
+              className="w-full md:w-auto px-6 py-4 bg-cyan-600/80 hover:bg-cyan-500 border border-cyan-400/50 text-white font-extrabold rounded-2xl transition-all duration-300 backdrop-blur-md whitespace-nowrap shadow-lg hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2"
             >
               <span className="animate-pulse">📍</span> Detect Location
             </button>
@@ -916,40 +763,40 @@ const TripPlanner = () => {
 
           {/* Number of days */}
           <div className="w-full md:w-32 group/input">
-            <label className="block text-xs font-black text-teal-300 uppercase tracking-widest mb-2 opacity-80 border-b border-transparent">Days</label>
+            <label className="block text-xs font-black text-cyan-300 uppercase tracking-widest mb-2 opacity-80 border-b border-transparent">Days</label>
             <input
               type="number"
               min="1"
               max="30"
               value={days}
               onChange={e => setDays(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-full px-5 py-4 rounded-2xl font-extrabold text-slate-800 bg-white/90 backdrop-blur-md shadow-lg outline-none text-center text-xl border border-white/20 transition-all hover:bg-white focus:ring-4 focus:ring-teal-500/30"
+              className="glass-input w-full px-5 py-4 rounded-2xl text-center text-xl"
             />
           </div>
         </div>
 
         {locStatus && (
-          <p className="mt-5 text-sm font-bold text-teal-100 bg-white/10 px-5 py-2.5 rounded-xl inline-flex items-center gap-2 border border-white/20 relative z-10 backdrop-blur-sm shadow-inner animate-in zoom-in-95 duration-300">
+          <p className="mt-5 text-sm font-bold text-cyan-100 bg-slate-900/50 px-5 py-2.5 rounded-xl inline-flex items-center gap-2 border border-cyan-500/30 relative z-10 backdrop-blur-sm shadow-inner animate-in zoom-in-95 duration-300">
             {locStatus}
           </p>
         )}
-      </div>
+      </motion.div>
 
       {/* ── Tab switcher ── */}
-      <div className="flex gap-2 bg-slate-200/50 p-1.5 rounded-2xl w-fit border border-slate-200 shadow-inner backdrop-blur-sm">
+      <div className="flex gap-2 glass-panel p-1.5 rounded-2xl w-fit">
         <button
           onClick={() => setTab('plan')}
-          className={`px-8 py-3 rounded-xl font-black transition-all duration-300 text-sm ${tab === 'plan' ? 'bg-white shadow-md text-teal-700 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-white/50 scale-95'}`}
+          className={`px-8 py-3 rounded-xl font-black transition-all duration-300 text-sm ${tab === 'plan' ? 'bg-cyan-600/50 shadow-md text-white border border-cyan-500/50 scale-100' : 'text-slate-400 hover:text-slate-200 hover:bg-white/10 scale-95 border border-transparent'}`}
         >
           🗺️ Plan Trip
         </button>
         <button
           onClick={() => setTab('saved')}
-          className={`px-8 py-3 rounded-xl font-black transition-all duration-300 text-sm flex items-center gap-2 ${tab === 'saved' ? 'bg-white shadow-md text-blue-700 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-white/50 scale-95'}`}
+          className={`px-8 py-3 rounded-xl font-black transition-all duration-300 text-sm flex items-center gap-2 ${tab === 'saved' ? 'bg-cyan-600/50 shadow-md text-white border border-cyan-500/50 scale-100' : 'text-slate-400 hover:text-slate-200 hover:bg-white/10 scale-95 border border-transparent'}`}
         >
           📂 My Trips
           {savedTrips.length > 0 && (
-            <span className="bg-gradient-to-r from-blue-500 to-teal-500 text-white text-[10px] px-2.5 py-0.5 rounded-full font-black shadow-inner">{savedTrips.length}</span>
+            <span className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-[10px] px-2.5 py-0.5 rounded-full font-black shadow-inner border border-white/20">{savedTrips.length}</span>
           )}
         </button>
       </div>
@@ -961,38 +808,38 @@ const TripPlanner = () => {
         <div className="flex flex-col lg:flex-row gap-8 animate-in fade-in duration-500">
 
           {/* Left — Place picker */}
-          <div className="lg:w-2/3 bg-white p-8 md:p-10 rounded-[2rem] shadow-xl border border-slate-100 min-h-[600px] relative transition-all">
-            <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-4 border-b border-slate-100 pb-5">
-              <span className="bg-blue-50 text-blue-600 p-3 rounded-2xl shadow-sm border border-blue-100">📍</span>
+          <div className="lg:w-2/3 glass-panel p-8 md:p-10 rounded-[2rem] min-h-[600px] relative transition-all">
+            <h3 className="text-2xl font-black text-white mb-6 flex items-center gap-4 border-b border-white/10 pb-5">
+              <span className="bg-cyan-900/50 text-cyan-300 p-3 rounded-2xl shadow-sm border border-cyan-500/30">📍</span>
               {activeCity ? `Discover ${activeCity}` : 'Select a destination'}
             </h3>
 
             {/* Success label (not an error) */}
             {placesLabel && places.length > 0 && (
-              <p className="text-xs font-black text-teal-700 uppercase tracking-widest bg-teal-50 border border-teal-100 px-4 py-2 rounded-xl mb-6 inline-block shadow-sm">
+              <p className="text-xs font-black text-cyan-300 uppercase tracking-widest bg-cyan-900/30 border border-cyan-500/30 px-4 py-2 rounded-xl mb-6 inline-block shadow-sm">
                 ✅ {placesLabel} • {places.length} Spots
               </p>
             )}
 
             {!activeCity ? (
-              <div className="flex flex-col items-center justify-center py-32 text-slate-400 font-black text-xl border-2 border-dashed border-slate-200 rounded-[2rem] bg-slate-50/50 gap-5 transition-all">
+              <div className="flex flex-col items-center justify-center py-32 text-slate-500 font-black text-xl border-2 border-dashed border-white/10 rounded-[2rem] bg-slate-900/30 gap-5 transition-all">
                 <span className="text-6xl opacity-30 animate-bounce">🧭</span>
                 Ready for an adventure?
               </div>
             ) : loadingPlaces ? (
               <div className="flex flex-col items-center justify-center py-32 gap-6">
                 <div className="relative flex justify-center items-center">
-                  <div className="w-16 h-16 border-4 border-teal-100 rounded-full" />
-                  <div className="w-16 h-16 border-4 border-teal-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0" />
+                  <div className="w-16 h-16 border-4 border-cyan-500/30 rounded-full" />
+                  <div className="w-16 h-16 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin absolute top-0 left-0" />
                 </div>
-                <p className="text-slate-500 font-extrabold tracking-wide uppercase animate-pulse text-sm">Discovering locations...</p>
+                <p className="text-slate-400 font-extrabold tracking-wide uppercase animate-pulse text-sm">Discovering locations...</p>
               </div>
             ) : placesError ? (
-              <div className="bg-red-50 border border-red-200 text-red-700 p-6 rounded-2xl font-bold text-sm shadow-inner">
+              <div className="bg-red-900/30 border border-red-500/50 text-red-300 p-6 rounded-2xl font-bold text-sm shadow-inner">
                 <p className="text-base text-center">⚠️ {placesError}</p>
               </div>
             ) : places.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-32 text-slate-400 font-black text-lg border-2 border-dashed border-slate-200 rounded-[2rem] bg-slate-50/50 gap-5">
+              <div className="flex flex-col items-center justify-center py-32 text-slate-500 font-black text-lg border-2 border-dashed border-white/10 rounded-[2rem] bg-slate-900/30 gap-5">
                 <span className="text-5xl opacity-30">🔍</span>
                 No places found. Try another city.
               </div>
@@ -1005,31 +852,31 @@ const TripPlanner = () => {
                     <div
                       key={place.id}
                       onClick={() => handleOpenDetails(place)}
-                      className={`cursor-pointer border-2 rounded-[1.5rem] p-5 relative overflow-hidden transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl group ${isSelected ? 'border-teal-500 bg-teal-50/50 shadow-md ring-4 ring-teal-500/10' : 'border-slate-100 bg-white hover:border-teal-300'}`}
+                      className={`cursor-pointer border rounded-[1.5rem] p-5 relative overflow-hidden transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl group ${isSelected ? 'border-cyan-400 bg-cyan-900/30 shadow-[0_0_15px_rgba(34,211,238,0.2)]' : 'border-white/10 bg-slate-900/50 hover:border-cyan-400/50'}`}
                     >
                       {/* Order badge */}
                       {isSelected && (
-                        <div className="absolute -right-5 -top-5 bg-gradient-to-br from-teal-400 to-teal-600 text-white w-16 h-16 rounded-full flex items-end justify-center pb-2 pl-2 font-black text-xl rotate-12 shadow-lg border-[3px] border-white z-10 transition-transform group-hover:scale-110">
+                        <div className="absolute -right-5 -top-5 bg-gradient-to-br from-cyan-400 to-blue-600 text-white w-16 h-16 rounded-full flex items-end justify-center pb-2 pl-2 font-black text-xl rotate-12 shadow-lg border-[3px] border-white/20 z-10 transition-transform group-hover:scale-110">
                           #{orderIdx + 1}
                         </div>
                       )}
-                      <h4 className={`font-extrabold text-xl mb-1 pr-8 truncate transition-colors ${isSelected ? 'text-teal-900' : 'text-slate-800 group-hover:text-teal-700'}`}>{place.name}</h4>
+                      <h4 className={`font-extrabold text-xl mb-1 pr-8 truncate transition-colors ${isSelected ? 'text-white' : 'text-slate-300 group-hover:text-white'}`}>{place.name}</h4>
                       {place.description && (
-                        <p className="text-sm text-slate-500 line-clamp-2 leading-relaxed mb-4">{place.description}</p>
+                        <p className="text-sm text-slate-400 line-clamp-2 leading-relaxed mb-4">{place.description}</p>
                       )}
                       <div className="flex flex-wrap gap-2">
                         {place.openingTime && (
-                          <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-50 border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
+                          <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-800 border border-white/10 text-slate-300 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
                             <span className="opacity-70">🕒</span> {place.openingTime}{place.closingTime ? ` – ${place.closingTime}` : ''}
                           </span>
                         )}
                         {place.bestTime && (
-                          <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-50 border border-amber-200 text-amber-700 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
+                          <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-900/30 border border-amber-500/30 text-amber-400 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
                             <span className="opacity-70">⭐</span> {place.bestTime}
                           </span>
                         )}
                         {place.latitude && place.longitude && (
-                          <span className="text-[10px] font-bold bg-blue-50 border border-blue-200 text-blue-700 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
+                          <span className="text-[10px] font-bold bg-blue-900/30 border border-blue-500/30 text-blue-400 px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm">
                             <span className="animate-pulse">📌</span> GPS
                           </span>
                         )}
@@ -1045,30 +892,30 @@ const TripPlanner = () => {
           <div className="lg:w-1/3 flex flex-col gap-6 sticky top-[100px] h-fit">
 
             {/* Selected places stack */}
-            <div className="bg-slate-50/80 backdrop-blur-md p-8 rounded-[2rem] shadow-inner border border-slate-200">
-              <h3 className="text-xl font-black text-slate-800 mb-5 flex items-center justify-between">
+            <div className="glass-panel backdrop-blur-md p-8 rounded-[2rem] shadow-inner border border-white/10">
+              <h3 className="text-xl font-black text-white mb-5 flex items-center justify-between">
                 <span className="flex items-center gap-3">
-                  <span className="bg-teal-100 text-teal-700 p-2.5 rounded-xl shadow-sm border border-teal-200">📋</span>
+                  <span className="bg-cyan-900/50 text-cyan-300 p-2.5 rounded-xl shadow-sm border border-cyan-500/30">📋</span>
                   Selected
                 </span>
-                <span className="bg-teal-600 text-white text-sm px-3 py-1 rounded-full font-bold shadow-inner">{selectedPlaces.length}</span>
+                <span className="bg-cyan-600 text-white text-sm px-3 py-1 rounded-full font-bold shadow-inner">{selectedPlaces.length}</span>
               </h3>
 
               {selectedPlaces.length === 0 ? (
-                <div className="text-center text-slate-400 py-12 font-bold border-2 border-dashed border-slate-300 rounded-2xl bg-white/50 text-sm">
+                <div className="text-center text-slate-500 py-12 font-bold border-2 border-dashed border-white/10 rounded-2xl bg-slate-900/30 text-sm">
                   Click places on the left to add them
                 </div>
               ) : (
                 <div className="flex flex-col gap-3 max-h-72 overflow-y-auto pr-2 custom-scrollbar">
                   {selectedPlaces.map((p, i) => (
-                    <div key={p.id} className="bg-white p-3.5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3 group relative transition-all hover:border-teal-300 hover:shadow-md">
-                      <div className="bg-gradient-to-br from-teal-400 to-teal-600 text-white font-black w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-sm shadow-sm border border-teal-500/50">
+                    <div key={p.id} className="bg-slate-900/50 p-3.5 rounded-2xl shadow-sm border border-white/10 flex items-center gap-3 group relative transition-all hover:border-cyan-400/50 hover:shadow-md">
+                      <div className="bg-gradient-to-br from-cyan-400 to-blue-600 text-white font-black w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-sm shadow-sm border border-white/20">
                         {i + 1}
                       </div>
-                      <span className="font-extrabold text-slate-700 truncate text-sm pr-6 group-hover:text-teal-700 transition-colors">{p.name}</span>
+                      <span className="font-extrabold text-slate-300 truncate text-sm pr-6 group-hover:text-white transition-colors">{p.name}</span>
                       <button
                         onClick={(e) => { e.stopPropagation(); togglePlace(p); }}
-                        className="absolute right-3 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white w-7 h-7 rounded-lg font-black opacity-0 group-hover:opacity-100 transition-all shadow-sm flex items-center justify-center border border-red-100 hover:border-red-600"
+                        className="absolute right-3 bg-red-900/50 text-red-300 hover:bg-red-600 hover:text-white w-7 h-7 rounded-lg font-black opacity-0 group-hover:opacity-100 transition-all shadow-sm flex items-center justify-center border border-red-500/50"
                       >
                         ✕
                       </button>
@@ -1080,10 +927,10 @@ const TripPlanner = () => {
               <button
                 onClick={handleGenerate}
                 disabled={!canGenerate}
-                className={`mt-6 w-full font-black py-4 rounded-[1.5rem] shadow-lg transition-all duration-300 text-base relative overflow-hidden group/gen ${
+                className={`mt-6 w-full font-black py-4 rounded-[1.5rem] shadow-lg transition-all duration-300 text-base relative overflow-hidden group/gen border ${
                   canGenerate
-                    ? 'bg-gradient-to-r from-blue-600 to-teal-500 text-white hover:shadow-teal-500/40 hover:-translate-y-1 active:scale-95'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-70'
+                    ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white hover:shadow-[0_0_15px_rgba(34,211,238,0.5)] hover:-translate-y-1 active:scale-95 border-cyan-400/50'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-70 border-white/10'
                 }`}
               >
                 {canGenerate && <span className="absolute inset-0 w-full h-full bg-gradient-to-r from-white/0 via-white/20 to-white/0 translate-x-[-100%] group-hover/gen:translate-x-[100%] transition-transform duration-700 ease-in-out" />}
@@ -1093,27 +940,27 @@ const TripPlanner = () => {
 
             {/* Generated itinerary preview */}
             {itinerary && (
-              <div className="bg-white border-2 border-teal-500 rounded-[2rem] shadow-2xl shadow-teal-500/10 p-8 relative overflow-hidden animate-in slide-in-from-right-8 duration-500">
-                <div className="absolute -top-10 -right-10 opacity-5 text-[150px] pointer-events-none">✨</div>
-                <h3 className="text-xl font-black text-teal-800 mb-6 flex items-center justify-between relative z-10">
+              <div className="glass-panel border-cyan-500/50 rounded-[2rem] shadow-[0_0_20px_rgba(34,211,238,0.15)] p-8 relative overflow-hidden animate-in slide-in-from-right-8 duration-500">
+                <div className="absolute -top-10 -right-10 opacity-10 text-[150px] pointer-events-none drop-shadow-[0_0_10px_rgba(34,211,238,0.8)]">✨</div>
+                <h3 className="text-xl font-black text-cyan-300 mb-6 flex items-center justify-between relative z-10">
                   <span className="flex items-center gap-2">✅ Optimized Plan</span>
-                  <span className="text-xs bg-teal-100 border border-teal-200 text-teal-700 px-3 py-1 rounded-full font-bold shadow-sm">
+                  <span className="text-xs bg-cyan-900/50 border border-cyan-500/50 text-cyan-100 px-3 py-1 rounded-full font-bold shadow-sm">
                     {days} day{days > 1 ? 's' : ''}
                   </span>
                 </h3>
                 <div className="flex flex-col gap-6 max-h-80 overflow-y-auto pr-2 custom-scrollbar relative z-10">
                   {itinerary.map(dayObj => (
-                    <div key={dayObj.day} className="bg-teal-50/50 p-4 rounded-2xl border border-teal-100">
-                      <p className="text-xs font-black uppercase tracking-widest text-teal-700 bg-white px-3 py-1.5 rounded-xl mb-3 border border-teal-100 shadow-sm inline-block">
+                    <div key={dayObj.day} className="bg-slate-900/50 p-4 rounded-2xl border border-white/10">
+                      <p className="text-xs font-black uppercase tracking-widest text-cyan-300 bg-slate-800 px-3 py-1.5 rounded-xl mb-3 border border-white/10 shadow-sm inline-block">
                         Day {dayObj.day}
                       </p>
                       <div className="flex flex-col gap-2 pl-1">
                         {dayObj.places.map((p, i) => (
-                          <div key={p.id} className="text-sm font-bold text-slate-700 flex items-start gap-3 bg-white p-2.5 rounded-xl border border-slate-100 shadow-sm">
-                            <span className="text-teal-600 font-black shrink-0 bg-teal-50 w-6 h-6 flex items-center justify-center rounded-md border border-teal-100">{i + 1}</span>
+                          <div key={p.id} className="text-sm font-bold text-slate-300 flex items-start gap-3 bg-slate-800/80 p-2.5 rounded-xl border border-white/5 shadow-sm">
+                            <span className="text-cyan-300 font-black shrink-0 bg-slate-900 w-6 h-6 flex items-center justify-center rounded-md border border-cyan-500/30">{i + 1}</span>
                             <span className="mt-0.5">{p.name}</span>
                             {p.openingTime && (
-                              <span className="text-[10px] text-slate-400 ml-auto shrink-0 mt-1 font-bold bg-slate-50 px-2 py-0.5 rounded">{p.openingTime}</span>
+                              <span className="text-[10px] text-slate-400 ml-auto shrink-0 mt-1 font-bold bg-slate-900 px-2 py-0.5 rounded">{p.openingTime}</span>
                             )}
                           </div>
                         ))}
@@ -1128,8 +975,8 @@ const TripPlanner = () => {
             {saveMsg && (
               <div className={`px-5 py-4 rounded-xl font-black text-sm border flex items-center gap-3 shadow-sm animate-in zoom-in-95 ${
                 saveMsg.type === 'success'
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                  : 'bg-red-50 border-red-200 text-red-700'
+                  ? 'bg-emerald-900/50 border-emerald-500/50 text-emerald-300'
+                  : 'bg-red-900/50 border-red-500/50 text-red-300'
               }`}>
                 <span className="text-xl">{saveMsg.type === 'success' ? '🚀' : '⚠️'}</span> {saveMsg.text}
               </div>
@@ -1138,10 +985,10 @@ const TripPlanner = () => {
             <button
               onClick={handleSaveTrip}
               disabled={!canSave || saving}
-              className={`w-full font-black py-4.5 rounded-[1.5rem] shadow-xl text-lg transition-all duration-300 relative overflow-hidden group/save ${
+              className={`w-full font-black py-4.5 rounded-[1.5rem] shadow-xl text-lg transition-all duration-300 relative overflow-hidden group/save border ${
                 canSave && !saving
-                  ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white hover:shadow-emerald-500/40 hover:-translate-y-1 active:scale-95'
-                  : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-70 py-4'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] hover:-translate-y-1 active:scale-95 border-emerald-400/50'
+                  : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-70 py-4 border-white/10'
               }`}
             >
               {canSave && !saving && <span className="absolute inset-0 w-full h-full bg-gradient-to-r from-white/0 via-white/20 to-white/0 translate-x-[-100%] group-hover/save:translate-x-[100%] transition-transform duration-700 ease-in-out" />}
@@ -1157,28 +1004,28 @@ const TripPlanner = () => {
           TAB: SAVED TRIPS
       ══════════════════════════════════════════════════════════════════════ */}
       {tab === 'saved' && (
-        <div className="bg-white p-8 md:p-12 rounded-[2rem] shadow-xl border border-slate-100 relative overflow-hidden animate-in fade-in zoom-in-95 duration-500">
-          <div className="absolute -top-10 -right-10 opacity-5 text-[200px] pointer-events-none rotate-12 select-none">🗄️</div>
-          <h2 className="text-3xl font-black text-slate-800 mb-8 tracking-tight relative z-10 flex items-center gap-4">
-            <span className="bg-blue-50 text-blue-600 p-3 rounded-2xl shadow-sm border border-blue-100">📂</span>
+        <div className="glass-panel p-8 md:p-12 rounded-[2rem] border border-white/10 relative overflow-hidden animate-in fade-in zoom-in-95 duration-500">
+          <div className="absolute -top-10 -right-10 opacity-5 text-[200px] pointer-events-none rotate-12 select-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">🗄️</div>
+          <h2 className="text-3xl font-black text-white mb-8 tracking-tight relative z-10 flex items-center gap-4">
+            <span className="bg-blue-900/50 text-blue-300 p-3 rounded-2xl shadow-sm border border-blue-500/30">📂</span>
             My Saved Trips
           </h2>
 
           {loadingTrips ? (
             <div className="flex items-center justify-center py-20 gap-6">
               <div className="relative flex justify-center items-center">
-                <div className="w-16 h-16 border-4 border-teal-100 rounded-full" />
-                <div className="w-16 h-16 border-4 border-teal-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0" />
+                <div className="w-16 h-16 border-4 border-cyan-500/30 rounded-full" />
+                <div className="w-16 h-16 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin absolute top-0 left-0" />
               </div>
-              <p className="text-slate-500 font-extrabold tracking-wide uppercase animate-pulse">Loading trips...</p>
+              <p className="text-slate-400 font-extrabold tracking-wide uppercase animate-pulse">Loading trips...</p>
             </div>
           ) : savedTrips.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-32 bg-slate-50/50 rounded-[2rem] border-2 border-dashed border-slate-200 gap-5">
+            <div className="flex flex-col items-center justify-center py-32 bg-slate-900/30 rounded-[2rem] border-2 border-dashed border-white/10 gap-5">
               <span className="text-6xl opacity-30 animate-bounce">📂</span>
               <p className="text-slate-500 font-black text-xl text-center">No trips saved yet. Plan and save your first trip!</p>
               <button
                 onClick={() => setTab('plan')}
-                className="mt-4 bg-gradient-to-r from-teal-500 to-blue-500 text-white font-black px-8 py-4 rounded-xl shadow-lg hover:shadow-teal-500/30 hover:-translate-y-1 active:scale-95 transition-all duration-300"
+                className="mt-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-black px-8 py-4 rounded-xl shadow-lg hover:shadow-[0_0_15px_rgba(34,211,238,0.3)] hover:-translate-y-1 active:scale-95 transition-all duration-300 border border-cyan-400/50"
               >
                 Start Planning
               </button>
@@ -1186,26 +1033,26 @@ const TripPlanner = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 relative z-10">
               {savedTrips.map(trip => (
-                <div key={trip.id} className="border border-gray-200 rounded-2xl overflow-hidden shadow hover:shadow-xl transition-all duration-300 bg-white hover:-translate-y-1 flex flex-col">
+                <div key={trip.id} className="border border-white/10 rounded-2xl overflow-hidden shadow hover:shadow-[0_0_20px_rgba(34,211,238,0.15)] transition-all duration-300 bg-slate-900/50 hover:-translate-y-1 flex flex-col hover:border-cyan-500/30">
                   {/* Card header */}
-                  <div className="bg-gradient-to-r from-teal-50 to-blue-50 p-5 border-b border-gray-100 flex justify-between items-start">
+                  <div className="bg-slate-800/80 p-5 border-b border-white/5 flex justify-between items-start">
                     <div>
-                      <h3 className="font-extrabold text-2xl text-teal-900 flex items-center gap-2 tracking-tight">
-                        <span className="bg-teal-500 w-3 h-3 rounded-full animate-pulse" />
+                      <h3 className="font-extrabold text-2xl text-white flex items-center gap-2 tracking-tight">
+                        <span className="bg-cyan-500 w-3 h-3 rounded-full animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
                         {trip.city}
                       </h3>
                       <div className="flex gap-2 mt-2">
-                        <span className="text-xs font-bold bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">
+                        <span className="text-xs font-bold bg-cyan-900/50 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full">
                           {trip.days || 1} day{(trip.days || 1) > 1 ? 's' : ''}
                         </span>
-                        <span className="text-xs font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                        <span className="text-xs font-bold bg-slate-700 text-slate-300 border border-white/10 px-2 py-0.5 rounded-full">
                           {trip.places?.length || 0} stops
                         </span>
                       </div>
                     </div>
                     <button
                       onClick={() => handleDeleteTrip(trip.id)}
-                      className="text-gray-400 hover:text-red-500 transition-colors font-bold text-lg leading-none p-1"
+                      className="text-slate-500 hover:text-red-400 transition-colors font-bold text-lg leading-none p-1"
                       title="Delete trip"
                     >
                       🗑
@@ -1214,7 +1061,7 @@ const TripPlanner = () => {
 
                   {/* Places timeline */}
                   <div className="p-5 flex-grow">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">
                       {new Date(trip.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                     </p>
 
@@ -1223,11 +1070,11 @@ const TripPlanner = () => {
                       <div className="flex flex-col gap-3">
                         {trip.itinerary.map(d => (
                           <div key={d.day}>
-                            <p className="text-[10px] font-black uppercase tracking-wider text-teal-600 mb-1.5">Day {d.day}</p>
-                            <div className="border-l-2 border-teal-100 pl-3 flex flex-col gap-1">
+                            <p className="text-[10px] font-black uppercase tracking-wider text-cyan-400 mb-1.5">Day {d.day}</p>
+                            <div className="border-l-2 border-white/10 pl-3 flex flex-col gap-1">
                               {d.places.map((p, i) => (
-                                <p key={i} className="text-sm font-bold text-gray-700 truncate">
-                                  <span className="text-teal-400 mr-1">{i + 1}.</span>{p.name}
+                                <p key={i} className="text-sm font-bold text-slate-300 truncate">
+                                  <span className="text-cyan-600 mr-1">{i + 1}.</span>{p.name}
                                 </p>
                               ))}
                             </div>
@@ -1235,16 +1082,16 @@ const TripPlanner = () => {
                         ))}
                       </div>
                     ) : (
-                      <div className="border-l-2 border-teal-200 pl-4 flex flex-col gap-2">
+                      <div className="border-l-2 border-white/10 pl-4 flex flex-col gap-2">
                         {trip.places?.map((p, i) => (
                           <div key={i} className="flex items-start gap-2">
-                            <div className="bg-white border-2 border-teal-400 text-teal-700 font-black text-[10px] w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5">
+                            <div className="bg-slate-900 border border-cyan-500/50 text-cyan-400 font-black text-[10px] w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5">
                               {i + 1}
                             </div>
                             <div>
-                              <p className="font-extrabold text-gray-900 text-sm leading-tight truncate">{p.name}</p>
+                              <p className="font-extrabold text-white text-sm leading-tight truncate">{p.name}</p>
                               {p.description && (
-                                <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">{p.description}</p>
+                                <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{p.description}</p>
                               )}
                             </div>
                           </div>
@@ -1261,28 +1108,28 @@ const TripPlanner = () => {
 
       {/* ── Place Details Modal ── */}
       {detailsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setDetailsModal(null)}>
-          <div className="bg-white rounded-[2rem] shadow-2xl shadow-black/40 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden relative animate-in zoom-in-95 slide-in-from-bottom-10 duration-500" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setDetailsModal(null)}>
+          <div className="glass-panel border-cyan-500/30 rounded-[2rem] shadow-[0_0_50px_rgba(0,0,0,0.8)] w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden relative animate-in zoom-in-95 slide-in-from-bottom-10 duration-500" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/80 backdrop-blur-sm shrink-0">
-              <h3 className="text-2xl font-black text-slate-800 pr-8 line-clamp-1 flex items-center gap-3">
-                <span className="bg-teal-100 text-teal-700 p-2 rounded-xl shadow-sm border border-teal-200 text-base">📌</span>
+            <div className="p-6 border-b border-white/10 flex justify-between items-center bg-slate-900/80 backdrop-blur-sm shrink-0">
+              <h3 className="text-2xl font-black text-white pr-8 line-clamp-1 flex items-center gap-3">
+                <span className="bg-cyan-900/50 text-cyan-300 p-2 rounded-xl shadow-sm border border-cyan-500/30 text-base">📌</span>
                 {detailsModal.name}
               </h3>
               <button 
                 onClick={() => setDetailsModal(null)} 
-                className="text-slate-400 hover:text-white hover:bg-red-500 font-black bg-slate-200 w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 transform hover:rotate-90 active:scale-95"
+                className="text-slate-400 hover:text-white hover:bg-red-900/80 hover:border-red-500/50 border border-transparent font-black bg-slate-800/80 w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 transform hover:rotate-90 active:scale-95"
                 title="Close"
               >✕</button>
             </div>
 
             {/* Body */}
-            <div className="p-6 md:p-8 overflow-y-auto flex-1 custom-scrollbar">
+            <div className="p-6 md:p-8 overflow-y-auto flex-1 custom-scrollbar text-slate-200">
               {detailsLoading ? (
-                <div className="py-20 flex flex-col items-center justify-center text-slate-400 font-black gap-6">
+                <div className="py-20 flex flex-col items-center justify-center text-slate-500 font-black gap-6">
                   <div className="relative flex justify-center items-center">
-                    <div className="w-16 h-16 border-4 border-teal-100 rounded-full" />
-                    <div className="w-16 h-16 border-4 border-teal-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0" />
+                    <div className="w-16 h-16 border-4 border-cyan-500/30 rounded-full" />
+                    <div className="w-16 h-16 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin absolute top-0 left-0" />
                   </div>
                   Loading destination intel...
                 </div>
@@ -1290,23 +1137,23 @@ const TripPlanner = () => {
                 <div className="flex flex-col gap-8">
                   {/* Image */}
                   {detailsData.image ? (
-                    <div className="relative w-full h-72 rounded-[1.5rem] shadow-lg overflow-hidden group">
+                    <div className="relative w-full h-72 rounded-[1.5rem] shadow-lg overflow-hidden group border border-white/10">
                       <img src={detailsData.image} alt={detailsData.name} className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" />
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
                     </div>
                   ) : (
-                    <div className="w-full h-56 bg-slate-50 rounded-[1.5rem] border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400 font-black gap-3 transition-colors hover:bg-slate-100 hover:border-slate-300">
+                    <div className="w-full h-56 bg-slate-900/50 rounded-[1.5rem] border-2 border-dashed border-white/10 flex flex-col items-center justify-center text-slate-600 font-black gap-3 transition-colors hover:bg-slate-800/50 hover:border-white/20">
                       <span className="text-5xl opacity-40">📷</span>
                       No Image Available
                     </div>
                   )}
                   
                   {/* Description */}
-                  <div className="bg-slate-50 p-6 rounded-[1.5rem] border border-slate-100">
-                    <h4 className="text-xs font-black text-teal-600 uppercase tracking-widest mb-4 flex items-center gap-2 border-b border-slate-200 pb-3">
-                      <span className="bg-teal-100 p-1.5 rounded-lg">ℹ️</span> About this Location
+                  <div className="bg-slate-900/50 p-6 rounded-[1.5rem] border border-white/10">
+                    <h4 className="text-xs font-black text-cyan-400 uppercase tracking-widest mb-4 flex items-center gap-2 border-b border-white/10 pb-3">
+                      <span className="bg-cyan-900/50 p-1.5 rounded-lg border border-cyan-500/30">ℹ️</span> About this Location
                     </h4>
-                    <p className="text-slate-700 leading-relaxed text-sm whitespace-pre-wrap font-medium">
+                    <p className="text-slate-300 leading-relaxed text-sm whitespace-pre-wrap font-medium">
                       {detailsData.description === "Details not available" && detailsModal.description 
                         ? detailsModal.description 
                         : detailsData.description}
@@ -1316,7 +1163,7 @@ const TripPlanner = () => {
                   {/* Add to Trip Action */}
                   <button
                     onClick={() => { togglePlace(detailsModal); setDetailsModal(null); }}
-                    className={`w-full py-4.5 font-black rounded-[1.5rem] shadow-xl text-lg transition-all duration-300 hover:-translate-y-1 active:scale-95 ${selectedPlaces.some(p => p.id === detailsModal.id) ? 'bg-red-50 border border-red-200 text-red-600 hover:bg-red-500 hover:text-white shadow-red-500/10' : 'bg-gradient-to-r from-teal-500 to-blue-500 text-white shadow-teal-500/30'}`}
+                    className={`w-full py-4.5 font-black rounded-[1.5rem] shadow-xl text-lg transition-all duration-300 hover:-translate-y-1 active:scale-95 border ${selectedPlaces.some(p => p.id === detailsModal.id) ? 'bg-red-900/30 border-red-500/50 text-red-300 hover:bg-red-800/80 hover:text-white' : 'bg-gradient-to-r from-cyan-600 to-blue-600 border-cyan-400/50 text-white shadow-[0_0_15px_rgba(34,211,238,0.3)]'}`}
                   >
                     {selectedPlaces.some(p => p.id === detailsModal.id) ? '🚫 Remove from Itinerary' : '✨ Add to Itinerary'}
                   </button>
@@ -1324,29 +1171,29 @@ const TripPlanner = () => {
                   {/* Nearby Places */}
                   {nearbyPlaces.length > 0 ? (
                     <div className="mt-4">
-                      <h4 className="text-xs font-black text-teal-600 uppercase tracking-widest mb-4">Nearby Places</h4>
+                      <h4 className="text-xs font-black text-cyan-400 uppercase tracking-widest mb-4">Nearby Places</h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {nearbyPlaces.map((np, i) => (
                           <div 
                             key={i} 
                             onClick={() => handleOpenDetails({ name: np.name, id: np.id, latitude: np.latitude, longitude: np.longitude, description: np.snippet })}
-                            className="bg-blue-50 border border-blue-100 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                            className="bg-slate-800/50 border border-white/5 p-4 rounded-xl shadow-sm hover:border-cyan-500/50 transition-colors cursor-pointer"
                           >
-                            <span className="font-bold text-blue-900 block truncate text-sm mb-1">{np.name}</span>
-                            <span className="text-xs text-blue-700 line-clamp-2 leading-relaxed" dangerouslySetInnerHTML={{ __html: np.snippet }}></span>
-                            {np.distance && <span className="block mt-2 text-xs font-black text-teal-700">📍 {np.distance} km away</span>}
+                            <span className="font-bold text-white block truncate text-sm mb-1">{np.name}</span>
+                            <span className="text-xs text-slate-400 line-clamp-2 leading-relaxed" dangerouslySetInnerHTML={{ __html: np.snippet }}></span>
+                            {np.distance && <span className="block mt-2 text-xs font-black text-cyan-500">📍 {np.distance} km away</span>}
                           </div>
                         ))}
                       </div>
                     </div>
                   ) : (
-                    <div className="mt-4 text-sm font-bold text-gray-400">No nearby places</div>
+                    <div className="mt-4 text-sm font-bold text-slate-500">No nearby places</div>
                   )}
 
                   {/* Nearby Services */}
                   {nearbyServices.length > 0 && (
                     <div className="mt-4">
-                      <h4 className="text-xs font-black text-teal-600 uppercase tracking-widest mb-4">Essential Services Nearby</h4>
+                      <h4 className="text-xs font-black text-cyan-400 uppercase tracking-widest mb-4">Essential Services Nearby</h4>
                       <div className="flex flex-col gap-3">
                         {['restaurant', 'hotel', 'hospital', 'atm', 'police'].map((cat) => {
                           const items = nearbyServices.filter(s => s.type === cat || (cat === 'hotel' && s.type === 'guest_house'));
@@ -1355,13 +1202,13 @@ const TripPlanner = () => {
                           const catName = cat === 'hospital' || cat === 'restaurant' ? cat + 's' : (cat === 'police' ? 'Police' : cat.toUpperCase());
                           
                           return (
-                            <div key={cat} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
-                              <h5 className="font-extrabold text-gray-800 text-sm mb-2 capitalize flex items-center gap-2">{icon} {catName}</h5>
+                            <div key={cat} className="bg-slate-800/50 border border-white/5 p-4 rounded-xl">
+                              <h5 className="font-extrabold text-white text-sm mb-2 capitalize flex items-center gap-2">{icon} {catName}</h5>
                               <div className="flex flex-col gap-2">
                                 {items.slice(0, 5).map((s, idx) => (
                                   <div key={idx} className="flex justify-between items-center text-sm">
-                                    <span className="font-bold text-gray-700 truncate pr-2">{s.name}</span>
-                                    <span className="text-xs font-black text-teal-600 shrink-0 bg-teal-50 px-2 py-0.5 rounded">{s.distance} km</span>
+                                    <span className="font-bold text-slate-300 truncate pr-2">{s.name}</span>
+                                    <span className="text-xs font-black text-cyan-400 shrink-0 bg-slate-900 border border-white/10 px-2 py-0.5 rounded">{s.distance} km</span>
                                   </div>
                                 ))}
                               </div>
@@ -1373,7 +1220,7 @@ const TripPlanner = () => {
                   )}
                 </div>
               ) : (
-                <div className="py-12 text-center font-bold text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl">Details not available</div>
+                <div className="py-12 text-center font-bold text-slate-500 border-2 border-dashed border-white/10 rounded-2xl">Details not available</div>
               )}
             </div>
           </div>

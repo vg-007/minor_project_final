@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import RoleHeader from './RoleHeader';
 import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { motion } from 'framer-motion';
 
 // ── Fix Leaflet default icon broken paths in React/Vite ─────────────────────
 delete L.Icon.Default.prototype._getIconUrl;
@@ -248,40 +250,42 @@ const TouristTrack = () => {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-6xl w-full mx-auto flex flex-col gap-8">
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-6xl w-full mx-auto flex flex-col gap-8 text-slate-200">
+      <RoleHeader role="tourist" />
 
       {/* ── Header card ── */}
-      <div className="bg-white p-8 rounded-3xl shadow-xl border border-blue-50 flex flex-col md:flex-row justify-between items-center gap-6">
-        <div className="text-center md:text-left">
-          <h2 className="text-4xl font-black text-blue-900 tracking-tight mb-2">
+      <div className="glass-panel p-8 rounded-3xl flex flex-col md:flex-row justify-between items-center gap-6 border border-cyan-500/30 relative overflow-hidden group">
+        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-20 mix-blend-overlay"></div>
+        <div className="text-center md:text-left relative z-10">
+          <h2 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-fuchsia-400 tracking-tight mb-2 drop-shadow-md">
             Location Broadcasting
           </h2>
-          <p className="text-gray-500 font-bold text-lg">
+          <p className="text-cyan-100 font-bold text-lg">
             Transmit your real-time GPS coordinates to your guardian.
           </p>
 
           {/* Tracker code */}
           {shortCode ? (
-            <div className="mt-5 bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 px-6 py-4 rounded-2xl flex flex-col gap-1 shadow-inner">
-              <span className="text-[11px] font-black text-yellow-700 uppercase tracking-widest">
+            <div className="mt-5 bg-cyan-900/30 border border-cyan-500/50 px-6 py-4 rounded-2xl flex flex-col gap-1 shadow-inner backdrop-blur-sm">
+              <span className="text-[11px] font-black text-cyan-300 uppercase tracking-widest">
                 Share this code with your Guardian
               </span>
-              <span className="font-mono text-4xl text-yellow-800 font-black select-all tracking-[0.2em]">
+              <span className="font-mono text-4xl text-white font-black select-all tracking-[0.2em] drop-shadow-[0_0_10px_rgba(34,211,238,0.8)]">
                 {shortCode}
               </span>
             </div>
           ) : (
-            <div className="mt-5 text-blue-400 font-bold animate-pulse text-sm">
+            <div className="mt-5 text-cyan-400 font-bold animate-pulse text-sm bg-cyan-900/30 px-4 py-2 rounded-xl inline-block border border-cyan-500/30">
               Generating tracker code...
             </div>
           )}
 
           {/* Live coords readout */}
           {hasCoords && (
-            <div className={`mt-4 px-4 py-2 rounded-xl text-sm font-mono font-bold flex items-center gap-2 border ${
+            <div className={`mt-4 px-4 py-2 rounded-xl text-sm font-mono font-bold flex items-center gap-2 border shadow-inner ${
               locSource === 'gps'
-                ? 'bg-blue-50 border-blue-100 text-blue-800'
-                : 'bg-orange-50 border-orange-200 text-orange-800'
+                ? 'bg-emerald-900/30 border-emerald-500/50 text-emerald-300'
+                : 'bg-amber-900/30 border-amber-500/50 text-amber-300'
             }`}>
               {locSource === 'gps' ? '🛰️ GPS' : '🌐 IP'}&nbsp;
               {latitude.toFixed(6)}, {longitude.toFixed(6)}
@@ -292,10 +296,10 @@ const TouristTrack = () => {
         {/* Start / Stop */}
         <button
           onClick={() => setTracking(prev => !prev)}
-          className={`px-10 py-5 rounded-2xl font-black text-xl shadow-xl transition-all transform hover:scale-105 text-white min-w-[250px] ${
+          className={`px-10 py-5 rounded-2xl font-black text-xl shadow-xl transition-all transform hover:scale-105 text-white min-w-[250px] relative z-10 border ${
             tracking
-              ? 'bg-red-500 hover:bg-red-600 animate-pulse border-4 border-red-200'
-              : 'bg-blue-600 hover:bg-blue-700 border-4 border-blue-200'
+              ? 'bg-red-900/50 hover:bg-red-600 animate-pulse border-red-500/50 shadow-[0_0_20px_rgba(239,68,68,0.5)]'
+              : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:shadow-[0_0_20px_rgba(34,211,238,0.5)] border-cyan-400/50'
           }`}
         >
           {tracking ? '🛑 Stop Broadcasting' : '📡 Start Broadcasting'}
@@ -304,10 +308,10 @@ const TouristTrack = () => {
 
       {/* ── Error banner (yellow for IP fallback, red for hard errors) ── */}
       {geoError && (
-        <div className={`w-full font-bold text-sm px-5 py-3 rounded-2xl flex items-center gap-3 border ${
+        <div className={`w-full font-bold text-sm px-5 py-3 rounded-2xl flex items-center gap-3 border shadow-inner ${
           ipFallbackUsed
-            ? 'bg-orange-50 border-orange-200 text-orange-700'
-            : 'bg-red-50 border-red-200 text-red-700'
+            ? 'bg-amber-900/30 border-amber-500/50 text-amber-300'
+            : 'bg-red-900/30 border-red-500/50 text-red-300'
         }`}>
           <span className="text-xl">{ipFallbackUsed ? '🌐' : '⚠️'}</span> {geoError}
         </div>
@@ -315,18 +319,18 @@ const TouristTrack = () => {
 
       {/* ── Status line ── */}
       {status && !geoError && (
-        <div className="w-full bg-blue-50 border border-blue-200 text-blue-700 font-bold text-sm px-5 py-2 rounded-2xl">
+        <div className="w-full bg-cyan-900/30 border border-cyan-500/30 text-cyan-300 font-bold text-sm px-5 py-3 rounded-2xl shadow-inner">
           {status}
         </div>
       )}
 
       {/* ── Map ── */}
-      <div className="w-full bg-white p-4 rounded-3xl border border-gray-200 shadow-xl overflow-hidden relative z-0 h-[650px]">
+      <div className="w-full glass-panel p-4 rounded-3xl border border-cyan-500/30 shadow-[0_0_20px_rgba(34,211,238,0.1)] overflow-hidden relative z-0 h-[650px]">
         <MapContainer
           center={mapCenter}
           zoom={mapZoom}
           style={{ height: '100%', width: '100%' }}
-          className="rounded-2xl"
+          className="rounded-2xl map-tiles-dark"
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -343,22 +347,22 @@ const TouristTrack = () => {
               position={[latitude, longitude]}
               icon={locSource === 'ip' ? fallbackIcon : new L.Icon.Default()}
             >
-              <Popup>
+              <Popup className="custom-popup">
                 {locSource === 'gps' ? (
                   <>
-                    <strong className="text-blue-900 font-extrabold text-base block">📍 You are here!</strong>
-                    <span className="text-xs text-gray-500 font-bold block mt-1">
+                    <strong className="text-cyan-400 font-extrabold text-base block">📍 You are here!</strong>
+                    <span className="text-xs text-slate-300 font-bold block mt-1">
                       {latitude.toFixed(6)}, {longitude.toFixed(6)}
                     </span>
-                    <span className="text-xs text-gray-400 block">GPS · {new Date().toLocaleTimeString()}</span>
+                    <span className="text-xs text-slate-500 block">GPS · {new Date().toLocaleTimeString()}</span>
                   </>
                 ) : (
                   <>
-                    <strong className="text-orange-700 font-extrabold text-base block">🌐 Approximate Location</strong>
-                    <span className="text-xs text-gray-500 font-bold block mt-1">
+                    <strong className="text-amber-400 font-extrabold text-base block">🌐 Approximate Location</strong>
+                    <span className="text-xs text-slate-300 font-bold block mt-1">
                       {latitude.toFixed(6)}, {longitude.toFixed(6)}
                     </span>
-                    <span className="text-xs text-orange-500 block">IP-based — may not be exact</span>
+                    <span className="text-xs text-amber-500/80 block">IP-based — may not be exact</span>
                   </>
                 )}
               </Popup>
@@ -368,16 +372,16 @@ const TouristTrack = () => {
 
         {/* Overlay — shown only before ANY location resolves (GPS or IP) */}
         {!tracking && !hasCoords && (
-          <div className="absolute inset-0 bg-white/70 backdrop-blur-sm z-[500] flex flex-col items-center justify-center rounded-2xl pointer-events-none">
-            <span className="text-6xl mb-4 opacity-70">🌍</span>
-            <h3 className="text-2xl font-black text-blue-900">GPS Broadcasting Offline</h3>
-            <p className="font-bold text-gray-600 bg-white/90 px-4 py-2 mt-4 rounded-lg shadow-sm">
+          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[500] flex flex-col items-center justify-center rounded-2xl pointer-events-none">
+            <span className="text-6xl mb-4 opacity-70 animate-pulse drop-shadow-[0_0_15px_rgba(34,211,238,0.5)]">🌍</span>
+            <h3 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-400 drop-shadow-md">GPS Broadcasting Offline</h3>
+            <p className="font-bold text-slate-300 bg-slate-900/50 border border-white/10 px-5 py-3 mt-4 rounded-xl shadow-inner backdrop-blur-sm">
               Click 'Start Broadcasting' to share your live location.
             </p>
           </div>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 };
 

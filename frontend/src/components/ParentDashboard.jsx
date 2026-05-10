@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import RoleHeader from './RoleHeader';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
+import { motion } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -12,13 +14,30 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
-const RecenterMap = ({ lat, lng }) => {
+const guideIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-gold.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
+const RecenterMap = ({ touristLoc, guideLoc }) => {
   const map = useMap();
   useEffect(() => {
-    if (lat && lng) {
-      map.flyTo([lat, lng], 16, { animate: true, duration: 1 });
+    if (touristLoc && guideLoc) {
+      const bounds = L.latLngBounds(
+        [touristLoc.lat, touristLoc.lng],
+        [guideLoc.lat, guideLoc.lng]
+      );
+      map.flyToBounds(bounds, { padding: [50, 50], animate: true, duration: 1.5 });
+    } else if (touristLoc) {
+      map.flyTo([touristLoc.lat, touristLoc.lng], 16, { animate: true, duration: 1 });
+    } else if (guideLoc) {
+      map.flyTo([guideLoc.lat, guideLoc.lng], 16, { animate: true, duration: 1 });
     }
-  }, [lat, lng, map]);
+  }, [touristLoc, guideLoc, map]);
   return null;
 };
 
@@ -32,6 +51,10 @@ const ParentDashboard = () => {
   
   const [tripData, setTripData] = useState(null);
   const [guideData, setGuideData] = useState(null);
+  
+  const [guideId, setGuideId] = useState(null);
+  const [guideLocation, setGuideLocation] = useState(null);
+  const [guideLastUpdated, setGuideLastUpdated] = useState('');
 
   const resolveCodeToUserId = async (codeStr) => {
     const q = query(collection(db, 'touristCodes'), where('code', '==', codeStr.trim().toUpperCase()));
@@ -69,11 +92,14 @@ const ParentDashboard = () => {
                  phone: gData.phone || gData.contact || 'Not provided',
                  experience: gData.experience || 'N/A'
               });
+              setGuideId(latestBooking.guideId);
            } else {
               setGuideData({ name: latestBooking.guideName, phone: 'N/A', experience: 'N/A' });
+              setGuideId(latestBooking.guideId);
            }
         } else {
            setGuideData(null);
+           setGuideId(null);
         }
      } catch(e){ console.error("Bookings fetch:", e) }
   };
@@ -97,82 +123,93 @@ const ParentDashboard = () => {
   };
 
   useEffect(() => {
-    let unsub = () => {};
+    let unsubTourist = () => {};
+    let unsubGuide = () => {};
+
     if (isLive && resolvedUserId) {
-        const docRef = doc(db, 'locations', resolvedUserId);
-        unsub = onSnapshot(docRef, (docSnap) => {
+        // Tourist Tracking Subscription
+        unsubTourist = onSnapshot(doc(db, 'locations', resolvedUserId), (docSnap) => {
           if (docSnap.exists()) {
             const data = docSnap.data();
-            const lat = data.latitude;
-            const lng = data.longitude;
-
-            console.log('[ParentDashboard] Location snapshot received:', { lat, lng, timestamp: data.timestamp });
-
-            // Handle both Date.now() numeric timestamps and ISO strings
+            console.log("Tourist live location:", data);
             let formattedTime = '';
             if (data.timestamp) {
-              const d = typeof data.timestamp === 'number'
-                ? new Date(data.timestamp)
-                : new Date(data.timestamp);
+              const d = new Date(data.timestamp);
               formattedTime = isNaN(d.getTime()) ? String(data.timestamp) : d.toLocaleString();
             }
-
-            setLocation({ lat, lng });
+            setLocation({ lat: data.latitude, lng: data.longitude });
             setLastUpdated(formattedTime);
             setError('');
           } else {
-            console.warn('[ParentDashboard] No location document for userId:', resolvedUserId);
-            setError('Tourist has not started broadcasting yet.');
+            console.warn('[ParentDashboard] No location document for tourist');
           }
-        }, (err) => {
-          console.error('[ParentDashboard] onSnapshot error:', err);
-          setError('Live connection dropped. Check your network.');
-        });
+        }, (err) => setError('Live connection dropped. Check your network.'));
+
+        // Guide Tracking Subscription (if guide is assigned and active)
+        if (guideId) {
+            unsubGuide = onSnapshot(doc(db, 'locations', guideId), (docSnap) => {
+               if (docSnap.exists()) {
+                 const data = docSnap.data();
+                 console.log("Guide live location:", data);
+                 let formattedTime = '';
+                 if (data.timestamp) {
+                   const d = new Date(data.timestamp);
+                   formattedTime = isNaN(d.getTime()) ? String(data.timestamp) : d.toLocaleString();
+                 }
+                 setGuideLocation({ lat: data.latitude, lng: data.longitude });
+                 setGuideLastUpdated(formattedTime);
+               } else {
+                 setGuideLocation(null);
+               }
+            }, (err) => console.error("Guide tracking error:", err));
+        }
     }
-    return () => unsub();
-  }, [isLive, resolvedUserId]);
+    return () => { unsubTourist(); unsubGuide(); };
+  }, [isLive, resolvedUserId, guideId]);
 
   return (
-    <div className="max-w-7xl w-full mx-auto flex flex-col gap-6">
-      <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center text-center">
-        <h2 className="text-3xl font-extrabold text-emerald-900 mb-2 tracking-tight">Parent Dashboard</h2>
-        <p className="text-gray-500 font-bold mb-6 text-sm">Enter the 6-Digit Tracker Alias (e.g., TR1234) for live metrics.</p>
+    <div className="max-w-7xl w-full mx-auto flex flex-col gap-6 text-slate-200">
+      <RoleHeader role="parent" />
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-panel p-6 md:p-8 rounded-3xl flex flex-col items-center text-center relative overflow-hidden">
+        <div className="absolute inset-0 bg-emerald-500/5 blur-3xl rounded-full"></div>
+        <h2 className="text-3xl font-extrabold text-white mb-2 tracking-tight relative z-10">Parent Dashboard</h2>
+        <p className="text-slate-400 font-bold mb-6 text-sm relative z-10">Enter the 6-Digit Tracker Alias (e.g., TR1234) for live metrics.</p>
         
-        <div className="flex w-full max-w-xl gap-3 flex-col sm:flex-row">
+        <div className="flex w-full max-w-xl gap-3 flex-col sm:flex-row relative z-10">
           <input 
              type="text" 
              value={touristInput} 
              onChange={e => { setTouristInput(e.target.value.toUpperCase()); setIsLive(false); setResolvedUserId(null); }} 
              placeholder="Enter Code" 
-             className="flex-1 px-5 py-4 rounded-xl border border-gray-200 focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 outline-none shadow-inner font-mono text-gray-800 font-black text-xl tracking-widest uppercase text-center" 
+             className="glass-input flex-1 px-5 py-4 rounded-xl font-mono text-xl tracking-widest uppercase text-center" 
           />
           <button 
              onClick={executeLock}
-             className="bg-emerald-600 text-white font-extrabold px-8 py-4 rounded-xl shadow-md hover:bg-emerald-700 transition"
+             className="bg-emerald-600/80 backdrop-blur-md text-white font-extrabold px-8 py-4 rounded-xl shadow-md hover:bg-emerald-500 border border-emerald-400/50 transition"
           >
              Lock Target
           </button>
         </div>
         
-        {error && <p className="text-red-500 mt-5 font-bold uppercase tracking-widest text-sm bg-red-50 px-5 py-2 rounded-xl border border-red-100">{error}</p>}
-      </div>
+        {error && <p className="text-red-400 mt-5 font-bold uppercase tracking-widest text-sm bg-red-900/50 px-5 py-2 rounded-xl border border-red-500/50 relative z-10">{error}</p>}
+      </motion.div>
 
       {resolvedUserId && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Map Content */}
-          <div className="lg:col-span-2 bg-white p-3 rounded-3xl border border-gray-200 shadow-sm overflow-hidden relative z-0 flex flex-col min-h-[500px]">
-            <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50 mb-2 rounded-t-2xl">
-               <h3 className="font-black text-gray-800 flex items-center gap-2">
-                 <span className="animate-pulse text-red-500">🔴</span> Live GPS Feed
+          <div className="lg:col-span-2 glass-panel p-3 rounded-3xl overflow-hidden relative z-0 flex flex-col min-h-[500px]">
+            <div className="px-4 py-3 border-b border-white/10 flex justify-between items-center bg-slate-900/50 mb-2 rounded-t-2xl">
+               <h3 className="font-black text-white flex items-center gap-2">
+                 <span className="animate-pulse text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]">🔴</span> Live GPS Feed
                </h3>
                <div className="flex flex-col items-end gap-1">
                  {lastUpdated && (
-                   <span className="text-xs font-black text-gray-500 tracking-tight bg-gray-200/50 px-3 py-1.5 rounded-lg border border-gray-200">
+                   <span className="text-xs font-black text-slate-400 tracking-tight bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
                      Updated: {lastUpdated}
                    </span>
                  )}
                  {location && (
-                   <span className="text-xs font-mono text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-100 font-bold">
+                   <span className="text-xs font-mono text-emerald-400 bg-emerald-900/30 px-3 py-1 rounded-lg border border-emerald-500/30 font-bold">
                      📍 {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
                    </span>
                  )}
@@ -180,7 +217,7 @@ const ParentDashboard = () => {
             </div>
             
             {/* Map is always mounted to avoid remount flicker on location updates */}
-            <div className={`relative flex-grow ${!location ? 'h-[500px]' : ''}`} style={{ height: '500px' }}>
+            <div className={`relative flex-grow rounded-2xl overflow-hidden border border-white/5 bg-slate-950 ${!location ? 'h-[500px]' : ''}`} style={{ height: '500px' }}>
               <MapContainer
                 center={location ? [location.lat, location.lng] : [17.3850, 78.4867]}
                 zoom={location ? 16 : 5}
@@ -188,25 +225,36 @@ const ParentDashboard = () => {
                 className="rounded-2xl z-0"
               >
                 <TileLayer
+                  className="map-tiles-dark"
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
                 {location && (
-                  <>
-                    <Marker position={[location.lat, location.lng]}>
-                      <Popup>
-                        <div className="font-bold text-emerald-900 text-center">
-                          📍 Tourist is here<br/>
-                          <span className="text-xs font-normal text-gray-500">{lastUpdated}</span>
-                        </div>
-                      </Popup>
-                    </Marker>
-                    <RecenterMap lat={location.lat} lng={location.lng} />
-                  </>
+                  <Marker position={[location.lat, location.lng]}>
+                    <Popup>
+                      <div className="font-bold text-emerald-900 text-center">
+                        📍 Tourist Live Location<br/>
+                        <span className="text-xs font-normal text-gray-500">{lastUpdated}</span>
+                      </div>
+                    </Popup>
+                  </Marker>
+                )}
+                {guideLocation && (
+                  <Marker position={[guideLocation.lat, guideLocation.lng]} icon={guideIcon}>
+                    <Popup>
+                      <div className="font-bold text-yellow-700 text-center">
+                        🧑‍💼 Guide: {guideData?.name || 'Guide'}<br/>
+                        <span className="text-xs font-normal text-gray-500">{guideLastUpdated}</span>
+                      </div>
+                    </Popup>
+                  </Marker>
+                )}
+                {(location || guideLocation) && (
+                  <RecenterMap touristLoc={location} guideLoc={guideLocation} />
                 )}
               </MapContainer>
               {!location && (
-                <div className="absolute inset-0 flex items-center justify-center text-gray-400 font-bold bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 z-10">
+                <div className="absolute inset-0 flex items-center justify-center text-slate-500 font-bold bg-slate-900/50 backdrop-blur-sm border-2 border-dashed border-white/10 z-10">
                   Awaiting active GPS coordinates...
                 </div>
               )}
@@ -214,11 +262,11 @@ const ParentDashboard = () => {
           </div>
 
           <div className="flex flex-col gap-6">
-            <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
-              <h3 className="text-lg font-black text-indigo-900 mb-4 border-b border-gray-100 pb-3 flex items-center gap-2">🗺️ Tourist Itinerary</h3>
+            <div className="glass-panel p-6 rounded-3xl">
+              <h3 className="text-lg font-black text-white mb-4 border-b border-white/10 pb-3 flex items-center gap-2">🗺️ Tourist Itinerary</h3>
               {tripData ? (
                 <div>
-                   <p className="font-bold text-sm text-indigo-700 mb-3 bg-indigo-50/50 px-3 py-2 border border-indigo-100 rounded-xl inline-block tracking-tight">
+                   <p className="font-bold text-sm text-indigo-300 mb-3 bg-indigo-900/30 px-3 py-2 border border-indigo-500/30 rounded-xl inline-block tracking-tight">
                      📍 Route: {tripData.city} {tripData.days && <span className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded-full ml-1">{tripData.days} Days</span>}
                    </p>
                    
@@ -226,56 +274,49 @@ const ParentDashboard = () => {
                      <div className="space-y-3">
                        {tripData.itinerary.map((day, dIdx) => (
                          <div key={dIdx}>
-                           <p className="text-[10px] font-black uppercase tracking-wider text-indigo-600 mb-1">Day {day.day}</p>
-                           <ul className="list-disc list-inside text-xs font-bold text-gray-700 ml-2">
+                           <p className="text-[10px] font-black uppercase tracking-wider text-indigo-400 mb-1">Day {day.day}</p>
+                           <ul className="list-disc list-inside text-xs font-bold text-slate-300 ml-2">
                              {day.places.map((p, pIdx) => (
-                               <li key={pIdx} className="truncate border-b border-gray-50 pb-1">{p.name}</li>
+                               <li key={pIdx} className="truncate border-b border-white/5 pb-1">{p.name}</li>
                              ))}
                            </ul>
                          </div>
                        ))}
                      </div>
                    ) : tripData.places && tripData.places.length > 0 ? (
-                      <ol className="list-decimal list-inside space-y-2.5 text-sm font-bold text-gray-600">
+                      <ol className="list-decimal list-inside space-y-2.5 text-sm font-bold text-slate-300">
                          {tripData.places.map((p, i) => (
-                           <li key={i} className="truncate border-b border-gray-50 pb-1">{p.name || p}</li>
+                           <li key={i} className="truncate border-b border-white/5 pb-1">{p.name || p}</li>
                          ))}
                       </ol>
                    ) : (
-                      <p className="text-xs text-gray-400 font-bold">No places specified on trip.</p>
+                      <p className="text-xs text-slate-500 font-bold">No places specified on trip.</p>
                    )}
                 </div>
               ) : (
-                <p className="text-sm font-bold text-gray-400 bg-gray-50 p-4 rounded-xl border border-dashed text-center">No trip planner data exists.</p>
+                <p className="text-sm font-bold text-slate-500 bg-slate-900/50 p-4 rounded-xl border border-dashed border-white/10 text-center">No trip planner data exists.</p>
               )}
             </div>
 
-            <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex-grow">
-              <h3 className="text-lg font-black text-emerald-900 mb-4 border-b border-gray-100 pb-3 flex items-center gap-2">🛡️ Assigned Guide</h3>
+            <div className="glass-panel p-6 rounded-3xl flex-grow">
+              <h3 className="text-lg font-black text-white mb-4 border-b border-white/10 pb-3 flex items-center gap-2">🛡️ Assigned Guide</h3>
               {guideData ? (
-                <div className="space-y-3">
-                   <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100 flex flex-col items-center justify-center text-center shadow-inner">
-                     <p className="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-1 opacity-70">Guide Alias</p>
-                     <p className="text-2xl font-black text-emerald-900 capitalize tracking-tight drop-shadow-sm">{guideData.name}</p>
-                   </div>
-                   <div className="flex justify-between items-center p-3.5 bg-gray-50 rounded-xl border border-gray-100 shadow-sm">
-                      <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Contact</span>
-                      <span className="text-sm font-black text-gray-800">{guideData.phone}</span>
-                   </div>
-                   <div className="flex justify-between items-center p-3.5 bg-gray-50 rounded-xl border border-gray-100 shadow-sm">
-                      <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Experience</span>
-                      <span className="text-sm font-black text-gray-800">{guideData.experience} Years</span>
-                   </div>
+                <div className="flex flex-col gap-3">
+                   <p className="font-extrabold text-white text-xl tracking-tight">{guideData.name}</p>
+                   <p className="text-sm font-bold text-slate-300 bg-slate-800/50 px-3 py-1.5 rounded-lg border border-white/5 inline-block w-fit">
+                     📞 {guideData.phone}
+                   </p>
+                   <p className="text-xs font-bold text-slate-400">Experience: {guideData.experience} Yrs</p>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center p-8 bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl gap-3">
-                   <span className="text-4xl grayscale opacity-30 drop-shadow">🧑‍💼</span>
-                   <p className="text-xs font-bold text-gray-400 text-center px-4 leading-relaxed">No local guide has been hired yet.</p>
-                </div>
+                <div className="flex flex-col items-center justify-center text-center p-4 bg-slate-900/50 rounded-xl border border-dashed border-white/10 h-full">
+                    <span className="text-4xl mb-2 grayscale opacity-50">🚶‍♂️</span>
+                    <p className="text-sm font-bold text-slate-500">Tourist is traveling independently.</p>
+                 </div>
               )}
             </div>
           </div>
-        </div>
+        </motion.div>
       )}
     </div>
   );

@@ -7,13 +7,27 @@
     scroll-behavior: smooth;
   }
   body {
-    @apply text-gray-900 bg-[#f7f8fc] antialiased selection:bg-teal-500 selection:text-white;
+    @apply text-slate-200 bg-slate-950 antialiased selection:bg-cyan-500 selection:text-white;
     font-family: 'Inter', sans-serif;
     margin: 0;
+    min-height: 100vh;
   }
 }
 
-/* Custom Scrollbar */
+/* Futuristic Map Dark Filter */
+.map-tiles-dark {
+  filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
+}
+
+/* Glass Utilities */
+.glass-panel {
+  @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl;
+}
+.glass-input {
+  @apply bg-white/5 backdrop-blur-md border border-white/10 text-white placeholder-slate-400 focus:ring-2 focus:ring-cyan-500 focus:border-transparent outline-none transition-all;
+}
+
+/* Custom Scrollbar for Dark Theme */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -22,9 +36,9 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #1e293b;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #334155;
 }
